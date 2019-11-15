@@ -5,7 +5,7 @@ import Prelude
 import Control.Alt ((<|>))
 import Core (DhallExpr(..), buildScript, exit, runCommand, runDhallToJSON)
 import Data.Either (Either(..))
-import Data.List (List, (:))
+import Data.List (List, (:), intercalate)
 import Data.List as List
 import Effect (Effect)
 import Effect.Aff (Aff)
@@ -13,16 +13,61 @@ import Effect.Aff as Aff
 import Effect.Class.Console (log)
 import Generate as Generate
 import Simple.JSON as JSON
+import Data.Array as Array
+import Data.Generic.Rep (class Generic)
+import Data.Generic.Rep.Show (genericShow)
+import Options.Applicative ((<**>), Parser, ParserInfo, argument, command, commandGroup, execParser, helper, hidden, idm, info, many, metavar, progDesc, str, subparser)
 
-foreign import argv :: Array String
+data Command
+  = GenerateCommand GenerateOptions
+  | InstallCommand (Array String)
+  | BuildCommand (Array String)
+  | BuildNixCommand (Array String)
 
-args :: List String
-args = List.drop 2 $ List.fromFoldable argv
+derive instance commandEq :: Eq Command
+derive instance genericCommand :: Generic Command _
+instance showCommand :: Show Command where show = genericShow
+
+hello :: Parser Command
+hello = Hello <<< Array.fromFoldable <$> many (argument str (metavar "TARGET..."))
+
+installCommandParser :: Parser Command
+installCommandParser = InstallCommand <<< Array.fromFoldable <$> many (argument str (metavar "[passthrough args for nix-shell]"))
+
+command :: Parser Command
+command = subparser
+  ( command "install"
+    (info installCommandParser
+    (progDesc "Install dependencies from spago-packages.nix in Spago style"))
+  <> command "goodbye"
+      (info (pure Goodbye)
+            (progDesc "Say goodbye"))
+    )
+  <|> subparser
+    ( command "bonjour"
+      (info hello
+            (progDesc "Print greeting"))
+  <> command "au-revoir"
+      (info (pure Goodbye)
+            (progDesc "Say goodbye"))
+  <> commandGroup "French commands:"
+  <> hidden
+    )
+
+run :: Command -> Effect Unit
+run (Hello targets) = log $ "Hello, " <> intercalate ", " targets <> "!"
+run Goodbye = log "Goodbye."
+
+opts :: ParserInfo Command
+opts = info (command <**> helper) idm
+
+main :: Effect Unit
+main = execParser opts >>= run
 
 main :: Effect Unit
 main = Aff.launchAff_ do
   case args of
-    "generate" : List.Nil -> Generate.generate
+    "generate" : rest -> Generate.generate
     "install" : rest -> install rest
     "build" : rest -> build SpagoStyle rest
     "build-nix" : rest -> build NixStyle rest
@@ -72,8 +117,14 @@ help = """spago2nix - generate Nix derivations from packages required in a spago
   Usage: spago2nix (generate | install | build)
 
 Available commands:
-  generate
+  generate [--project-dir PROJECT-DIR] [--output OUTPUT] [--cache-dir CACHE-DIR]
     Generate a Nix expression of packages from Spago
+
+    Optional arguments:
+      PROJECT-DIR    The directory with ./spago.dhall and ./packages.dhall file (default: $CWD)
+      OUTPUT         The output file to generate (default: ./spago-packages.nix)
+      CACHE-DIR      The cache dir to generate (default: ./.spago2nix/)
+
   install [passthrough args for nix-shell]
     Install dependencies from spago-packages.nix in Spago style
   build [passthrough args for nix-shell]
